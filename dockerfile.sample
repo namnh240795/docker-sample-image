@@ -1,0 +1,44 @@
+# ---- Bases ----
+    FROM node:lts-alpine3.20 AS base
+    WORKDIR /app
+    COPY package.json ./
+    COPY pnpm-lock.yaml ./
+    RUN npm install -g pnpm
+    
+    # ---- Dependencies ----
+    FROM base AS dependencies
+    RUN pnpm install --frozen-lockfile
+    
+    # ---- Copy Files/Build ----
+    FROM dependencies AS build
+    COPY . .
+    
+    # Define the build argument
+    ARG BUILD_SCRIPT=backend-scripts
+    
+    # Use the build argument to run the specified build script
+    RUN pnpm run build backend \
+        && pnpm run build $BUILD_SCRIPT \
+        && pnpm prune --prod
+    
+    # ---- Release ----
+    FROM node:lts-alpine3.20 AS release
+    WORKDIR /app
+    
+    RUN apk add --no-cache curl
+    
+    # RUN wget https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem
+    
+    ARG BUILD_SCRIPT=backend-scripts
+    
+    ENV SCRIPT_URL=${BUILD_SCRIPT}
+    
+    COPY --from=build /app/dist/apps/backend ./apps/backend
+    COPY --from=build /app/dist/libs/$BUILD_SCRIPT ./apps/backend/$BUILD_SCRIPT
+    COPY --from=build /app/apps/backend/.env.example ./apps/backend/.env
+    COPY --from=build /app/apps/backend/empty.public.cer ./apps/backend/salesforce.public.cer
+    COPY --from=build /app/apps/backend/src/lga/csv/lga-postcode.csv ./apps/backend/src/lga/csv/lga-postcode.csv
+    COPY --from=build /app/apps/backend/src/commission/csv/commission.csv ./apps/backend/src/commission/csv/commission.csv
+    COPY --from=build /app/node_modules ./node_modules
+    COPY --from=build /app/package.json ./package.json
+    CMD node apps/backend/$SCRIPT_URL/index.js && node apps/backend/main.js
